@@ -1,5 +1,12 @@
-import socket, threading, time
+import socket
+import threading
+import time
 
+from message import Message
+from encryptor import Encryptor
+
+
+USER = None
 SHUTDOWN = False
 
 
@@ -8,17 +15,14 @@ def main():
 	key = 8194
 
 	s, server = make_connection()
-	rT = make_receiving_pool(s, key)
-	username = None
+	join_user(s, server)
+	rT = make_receiving_pool(s, server, key)
 
 	while not SHUTDOWN:
-		if username is None:
-			username = join_user(s, server)
-		else:
-			try:
-				send_message(s, server, username, key)
-			except:
-				SHUTDOWN = quit_user(s, server, username)
+		try:
+			send_message(s, server)
+		except KeyboardInterrupt:
+			SHUTDOWN = quit_user(s, server)
 
 	rT.join()
 	s.close()
@@ -35,68 +39,63 @@ def make_connection(server_url="127.0.1.1", server_port=9090, client_port=0):
 	return s, server
 
 
-def make_receiving_pool(s, key):
-	rT = threading.Thread(target=receving, args=("RecvThread", s, key))
+def make_receiving_pool(s, server, key):
+	rT = threading.Thread(target=receving, args=("RecvThread", s, server))
 	rT.start()
 
 	return rT
 
 
-def receving(name, sock, key):
+def receving(name, sock, server):
 	global SHUTDOWN
+	global USER
 	while not SHUTDOWN:
 		try:
 			while True:
 				data, _ = sock.recvfrom(1024)
-				#print(data.decode("utf-8")
-				decrypted = decrypt(data, key)
-				print(decrypted)
+				msg = Message().from_json(data)
+				if msg.type == "crypto":
+					decrypted = USER.decrypt_message(msg.content)
+					print(decrypted)
+				elif msg.type == "get_key":
+					key = USER.generate_key(msg.content)
+					Message("get_key", key).send(sock, server)
+				elif msg.type == "set_key":
+					USER.key = USER.generate_key(msg.content)
+				else:
+					print(msg.content)
 				time.sleep(0.2)
-		except:
+		except BlockingIOError:
 			pass
-
-
-def encrypt(message, key):
-	encrypted = ""
-	for i in message:
-		encrypted += chr(ord(i)^key)
-	
-	return encrypted
-
-
-def decrypt(data, key):
-	decrypted = ""; k = False
-	for i in data.decode("utf-8"):
-		if i == ":":
-			k = True
-			decrypted += i
-		elif k == False or i == " ":
-			decrypted += i
-		else:
-			decrypted += chr(ord(i)^key)
-	
-	return decrypted
+		except Exception as e:
+			print(e)
 
 
 def join_user(s, server):
+	global USER
 	username = input("Name: ")
-	s.sendto((f"[{username}] => join chat ").encode("utf-8"), server)z
+	USER = Encryptor(username)
+	Message("info", f"[{username}] => join chat ").send(s, server)
 
 	return username
 
 
-def send_message(s, server, username, key):
-	message = input()
-	message = encrypt(message, key)
+def send_message(s, server):
+	global USER
+	data = input()
+	data = f"[{USER.name}] :: {data}"
+	data = USER.encrypt_message(data)
 
-	if message != "":
-		s.sendto(("["+username + "] :: "+message).encode("utf-8"), server)
+	if data != "":
+		Message("crypto", data).send(s, server)
 	
 	time.sleep(0.2)
 
 
-def quit_user(s, server, username):
-	s.sendto(("["+username + "] <= left chat ").encode("utf-8"), server)
+def quit_user(s, server):
+	global USER
+	Message("quit", f"[{USER.name}] <= left chat ").send(s, server)
+
 	return True
 
 

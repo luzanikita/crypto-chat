@@ -1,4 +1,7 @@
-import socket, time
+import socket
+import time
+
+from message import Message
 
 
 def main():
@@ -6,9 +9,15 @@ def main():
 	
 	while True:
 		try:
-			data, addr = get_info(s)
-			send_info(s, clients, data, addr)
-		except:
+			msg, addr = get_info(s)
+			send_info(s, clients, msg, addr)
+			if addr not in clients:
+				clients.append(addr)
+				key_exchange(s, clients)
+			elif msg.type == "quit":
+				clients.remove(addr)
+				key_exchange(s, clients)
+		except KeyboardInterrupt:
 			print("\n[ Server stopped ]")
 			break
 	
@@ -22,26 +31,47 @@ def make_connection(port=9090):
 
 	print(f"[ Server started on {host}:{port} ]")
 
-	return s, {}
+	return s, []
 
 
 def get_info(s):
 	data, addr = s.recvfrom(1024)
+	msg = Message().from_json(data)
+	
 	itsatime = time.strftime("%Y-%m-%d-%H.%M.%S", time.localtime())
 
-	print("["+addr[0]+"]=["+str(addr[1])+"]=["+itsatime+"]/",end="")
-	print(data.decode("utf-8"))
+	print(f"[{addr[0]}]=[{addr[1]}]=[{itsatime}]/",end="")
+	print(msg)
 
-	return data, addr
+	return msg, addr
 
 
-def send_info(s, clients, data, addr):
-	if addr not in clients:
-		clients[addr] = data.decode("utf-8").split(":")[-1]
-	
+def send_info(s, clients, message, addr):
 	for client in clients:
 		if addr != client:
-			s.sendto(data, client)
+			message.send(s, client)
+
+
+def key_exchange(s, clients, g=2):
+	keys = {k:g for k in clients}
+	n = len(clients)
+	for i in range(n - 1):
+		new_keys = {}
+		for j in range(n):
+			Message("get_key", keys[clients[(j + 1) % n]]) \
+				.send(s, clients[j])
+			while True:
+				try:
+					msg, addr = get_info(s)
+					new_keys[addr] = msg.content
+					break
+				except KeyboardInterrupt:
+					break
+		
+		keys = new_keys
+
+	for i in range(n):
+		Message("set_key", keys[clients[(i + 1) % n]]).send(s, clients[i])
 
 
 if __name__ == "__main__":
